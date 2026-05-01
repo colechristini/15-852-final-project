@@ -1,15 +1,12 @@
 #include <iostream>
 #include <fstream>
-#include <parlaylib/include/parlay/sequence.h>
+#include <lib/parlaylib/include/parlay/sequence.h>
 #include<vector>
 #include <cmath>
+#include "lib/orientation_types.hpp"
 #include "sequential_orientation.hpp"
 #include "parallel_orientation.hpp"
 
-
-using graph = parlay::sequence<parlay::sequence<int>>;
-using edge = std::pair<int, int>;
-using edge_batch = std::pair<bool, parlay::sequence<edge>>;
 
 
 std::tuple<int, int, parlay::sequence<edge_batch>> read_edge_batches(const std::string& filename) {

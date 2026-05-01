@@ -1,14 +1,9 @@
-#include <parlaylib/include/parlay/sequence.h>
-#include <parlaylib/include/parlay/primitives.h>
+#include <lib/orientation_types.hpp>
+#include <lib/parlaylib/include/parlay/primitives.h>
 #include <deque>
 #include <queue>
 #include <cassert>
 
-
-using vertex = int;
-using graph = parlay::sequence<parlay::sequence<int>>;
-using edge = std::pair<vertex, vertex>;
-using edge_batch = std::pair<bool, parlay::sequence<edge>>;
 
 
 
