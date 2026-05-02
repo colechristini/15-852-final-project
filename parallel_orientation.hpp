@@ -39,10 +39,10 @@ void recompute_degrees_and_levels(
         const parlay::sequence<skew_bag<vertex>>& edge_bags,
         parlay::sequence<size_t>& degrees,
         parlay::sequence<unsigned char>& in_vhigh,
-        int high_threshold) {
+        int tau) {
     parlay::parallel_for(0, edge_bags.size(), [&](size_t i) {
         degrees[i] = edge_bags[i].size();
-        in_vhigh[i] = degrees[i] > static_cast<size_t>(high_threshold);
+        in_vhigh[i] = degrees[i] > static_cast<size_t>(tau);
     });
 }
 
@@ -115,8 +115,9 @@ graph static_orientation(const parlay::sequence<std::pair<vertex, vertex>>& edge
 
 graph parallel_amortized_orient(
     const parlay::sequence<edge_batch>& edge_batches,
-    int n, int tau, int tau_prime, int c, double epsilon) {
-    int high_threshold = std::max(tau, tau_prime);
+    int n, int c, double epsilon) {
+    double c_doub = static_cast<double>(c);
+    int tau = static_cast<int>(std::round((24. / 5.) * c_doub));
     parlay::sequence<skew_bag<vertex>> edge_bags(n);
     parlay::sequence<size_t> degrees(n, 0);
     parlay::sequence<unsigned char> in_vhigh(n, 0);
@@ -130,7 +131,7 @@ graph parallel_amortized_orient(
                 vertex u = grouped_edges[i].first;
                 edge_bags[u].batch_insert(grouped_edges[i].second);
             });
-            recompute_degrees_and_levels(edge_bags, degrees, in_vhigh, high_threshold);
+            recompute_degrees_and_levels(edge_bags, degrees, in_vhigh, tau);
             auto vhigh = parlay::filter(parlay::tabulate(n, [](size_t i) {
                 return static_cast<vertex>(i);
             }), [&](vertex u) {
@@ -147,7 +148,7 @@ graph parallel_amortized_orient(
                         edge_bags[u].batch_insert(statically_oriented[u]);
                     }
                 });
-                recompute_degrees_and_levels(edge_bags, degrees, in_vhigh, high_threshold);
+                recompute_degrees_and_levels(edge_bags, degrees, in_vhigh, tau);
             }
         }
         else {
@@ -167,7 +168,7 @@ graph parallel_amortized_orient(
                 auto neighbors = grouped_reversed_edges[i].second;
                 edge_bags[v].batch_delete(neighbors);
             });
-            recompute_degrees_and_levels(edge_bags, degrees, in_vhigh, high_threshold);
+            recompute_degrees_and_levels(edge_bags, degrees, in_vhigh, tau);
         }
     }
 

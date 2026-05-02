@@ -74,19 +74,12 @@ int main(int argc, char* argv[]) {
     }
     else if (algorithm_name == "parallel") {
         // this is genuinely just the worst input parsing code I've ever written LMAO
-        if (argc >= 9 && std::string(argv[4]) == "-tau" && std::string(argv[6]) == "-tau_prime" && std::string(argv[8]) == "-c" ) {
-            int tau = std::stoi(argv[5]);
-            int tau_prime = std::stoi(argv[7]);
-            int c = std::stoi(argv[9]);
-            oriented_graph = parallel_amortized_orient(edge_batches, n, tau, tau_prime, c, 0.1);
+        if (argc >= 8  && std::string(argv[4]) == "-c" && std::string(argv[6]) == "-eps") {
+            int c = std::stoi(argv[5]);
+            double eps = std::stod(argv[7]);
+            oriented_graph = parallel_amortized_orient(edge_batches, n, c, eps);
         }
-        else {
-            assert(n > 0);
-            int tau = static_cast<int>(std::ceil(std::log2(n)));
-            int tau_prime = static_cast<int>(std::ceil(std::log2(n)));
-            int c = static_cast<int>(std::ceil(std::log2(n)));
-            oriented_graph = parallel_amortized_orient(edge_batches, n, tau, tau_prime, c, 0.1);
-        }
+        else return 1;
     }
     else {
         std::cerr << "Unknown algorithm: " << algorithm_name << std::endl;
