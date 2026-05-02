@@ -8,6 +8,7 @@
 #include "parallel_orientation.hpp"
 #include <lib/compute_orientation_quality.hpp>
 #include "lib/approximate_arboricity.hpp"
+#include <chrono>
 
 std::tuple<int, int, parlay::sequence<edge_batch>> read_edge_batches(const std::string& filename) {
     int n, m, num_batches;
@@ -57,27 +58,39 @@ int main(int argc, char* argv[]) {
     std::string output_file = argv[3];
     auto [n, m, edge_batches] = read_edge_batches(graph_file);
     graph oriented_graph;
+    long long nanos;
     if (algorithm_name == "sequential_amortized" || algorithm_name == "brodal_fagerberg") {
         int arboricity = compute_approximate_arboricity(edge_batches, n);
+        auto start = std::chrono::high_resolution_clock::now();
         oriented_graph = sequential_amortized_orient(edge_batches, n, 10);
+        auto end = std::chrono::high_resolution_clock::now();
+        nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
     }
     else if (algorithm_name == "sequential_worst_case") {
         if (argc >= 6 && std::string(argv[4]) == "-k") {
             int k = std::stoi(argv[5]);
+            auto start = std::chrono::high_resolution_clock::now();
             oriented_graph = sequential_worst_case_orient(edge_batches, n, k);
+            auto end = std::chrono::high_resolution_clock::now();
+            nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
         }
         else {
             assert(n > 0);
             int k = static_cast<int>(std::ceil(std::log2(n)));
+            auto start = std::chrono::high_resolution_clock::now();
             oriented_graph = sequential_worst_case_orient(edge_batches, n, k);
+            auto end = std::chrono::high_resolution_clock::now();
+            nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
         }
     }
     else if (algorithm_name == "parallel") {
-        // this is genuinely just the worst input parsing code I've ever written LMAO
         if (argc >= 8  && std::string(argv[4]) == "-c" && std::string(argv[6]) == "-eps") {
             int c = std::stoi(argv[5]);
             double eps = std::stod(argv[7]);
+            auto start = std::chrono::high_resolution_clock::now();
             oriented_graph = parallel_amortized_orient(edge_batches, n, c, eps);
+            auto end = std::chrono::high_resolution_clock::now();
+            nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
         }
         else return 1;
     }
@@ -87,6 +100,7 @@ int main(int argc, char* argv[]) {
     }
     size_t max_out_degree = compute_max_out_degree(oriented_graph);
     double average_out_degree = compute_average_out_degree(oriented_graph);
+    std::cout << "Time taken (ns): " << nanos << std::endl;
     std::cout << "Max out-degree: " << max_out_degree << std::endl;
     std::cout << "Average out-degree: " << average_out_degree << std::endl;
     write_oriented_graph(oriented_graph, output_file);
