@@ -2,6 +2,7 @@
 #include <parlaylib/include/parlay/primitives.h>
 #include "lib/orientation_types.hpp"
 
+// This only works if all batches are adds
 graph make_undirected_from_batches(const parlay::sequence<edge_batch>& edge_batches, int n) {
     graph undirected_graph(n);
     for (const auto& batch : edge_batches) {
@@ -37,4 +38,7 @@ int compute_approximate_arboricity(graph g) {
     return (max_removed_degree + 1) / 2;
 }
 
-
+int compute_approximate_arboricity(const parlay::sequence<edge_batch>& edge_batches, int n) {
+    graph undirected_graph = make_undirected_from_batches(edge_batches, n);
+    return compute_approximate_arboricity(undirected_graph);
+}
