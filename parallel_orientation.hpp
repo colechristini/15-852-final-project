@@ -6,157 +6,137 @@
 #include <list>
 #include <cmath>
 #include <algorithm>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
-namespace {
-
-bool sequence_contains(const parlay::sequence<vertex>& neighbors, vertex v) {
-    return std::find(neighbors.begin(), neighbors.end(), v) != neighbors.end();
-}
-
-parlay::sequence<edge> outgoing_edges_for_vertices(
-        const parlay::sequence<skew_bag<vertex>>& edge_bags,
-        const parlay::sequence<vertex>& vertices) {
-    auto degrees = parlay::tabulate(vertices.size(), [&](size_t i) {
-        return edge_bags[vertices[i]].size();
-    });
-    auto offsets_and_total = parlay::scan(degrees);
-    const auto& offsets = offsets_and_total.first;
-    size_t total = offsets_and_total.second;
-
-    parlay::sequence<edge> edges(total);
-    parlay::parallel_for(0, vertices.size(), [&](size_t i) {
-        vertex u = vertices[i];
-        auto neighbors = edge_bags[u].to_sequence();
-        for (size_t j = 0; j < neighbors.size(); j++) {
-            edges[offsets[i] + j] = {u, neighbors[j]};
-        }
-    });
-    return edges;
-}
-
-void recompute_degrees_and_levels(
-        const parlay::sequence<skew_bag<vertex>>& edge_bags,
-        parlay::sequence<size_t>& degrees,
-        parlay::sequence<unsigned char>& in_vhigh,
-        int tau) {
-    parlay::parallel_for(0, edge_bags.size(), [&](size_t i) {
-        degrees[i] = edge_bags[i].size();
-        in_vhigh[i] = degrees[i] > static_cast<size_t>(tau);
-    });
-}
-
-}
-
-
-graph static_orientation(const parlay::sequence<std::pair<vertex, vertex>>& edges,
-                         int c, double epsilon,
-                         int n) {
-    auto normalized_edges = parlay::map(edges, [](const auto& p) {
-        auto [u, v] = p;
-        if (u < v) return std::make_pair(u, v);
-        else return std::make_pair(v, u);
-    });
-
-    auto non_self_edges = parlay::filter(normalized_edges, [](const auto& e) {
-        return e.first != e.second;
-    });
-    auto undirected_edges = parlay::remove_duplicates_ordered(non_self_edges);
-
-    auto active_edges = parlay::tabulate(2 * undirected_edges.size(), [&](size_t i) {
-        auto [u, v] = undirected_edges[i / 2];
-        return (i % 2 == 0) ? std::make_pair(u, v) : std::make_pair(v, u);
-    });
-
-    parlay::sequence<edge> oriented_edges;
-    const double degree_threshold = (2.0 + epsilon) * static_cast<double>(c);
-
-    while (!active_edges.empty()) {
-        auto grouped_edges = parlay::group_by_key(active_edges);
-        parlay::sequence<unsigned char> vertex_marked(n, 0);
-
-        parlay::parallel_for(0, grouped_edges.size(), [&](size_t i) {
-            vertex u = grouped_edges[i].first;
-            if (grouped_edges[i].second.size() <= degree_threshold) {
-                vertex_marked[u] = 1;
-            }
-        });
-
-        if (parlay::count(vertex_marked, static_cast<unsigned char>(1)) == 0) {
-            auto min_degree_vertex = parlay::min_element(
-                grouped_edges,
-                [](const auto& a, const auto& b) {
-                    return a.second.size() < b.second.size();
-                });
-            vertex_marked[min_degree_vertex->first] = 1;
-        }
-
-        auto newly_oriented = parlay::filter(active_edges, [&](const auto& e) {
-            auto [u, v] = e;
-            return vertex_marked[u] &&
-                   (!vertex_marked[v] || (vertex_marked[v] && u < v));
-        });
-        oriented_edges = parlay::append(oriented_edges, newly_oriented);
-
-        active_edges = parlay::filter(active_edges, [&](const auto& e) {
-            auto [u, v] = e;
-            return !vertex_marked[u] && !vertex_marked[v];
-        });
+struct ParallelEdgeHash {
+    size_t operator()(const edge& e) const {
+        size_t h1 = std::hash<vertex>{}(e.first);
+        size_t h2 = std::hash<vertex>{}(e.second);
+        return h1 ^ (h2 + 0x9e3779b9 + (h1 << 6) + (h1 >> 2));
     }
+};
 
-    graph oriented_graph(n);
-    auto grouped_oriented_edges = parlay::group_by_key(oriented_edges);
-    parlay::parallel_for(0, grouped_oriented_edges.size(), [&](size_t i) {
-        vertex u = grouped_oriented_edges[i].first;
-        oriented_graph[u] = grouped_oriented_edges[i].second;
-    });
-    return oriented_graph;
-}
+class ParallelAmortizedOrient {
+    public:
+        #ifdef INSTRUMENT
+        std::unordered_map<edge, int, ParallelEdgeHash> flip_counts;
+        #endif
 
-graph parallel_amortized_orient(
-    const parlay::sequence<edge_batch>& edge_batches,
-    int n, int c, double epsilon) {
-    double c_doub = static_cast<double>(c);
-    int tau = static_cast<int>(std::round((24. / 5.) * c_doub));
-    parlay::sequence<skew_bag<vertex>> edge_bags(n);
-    parlay::sequence<size_t> degrees(n, 0);
-    parlay::sequence<unsigned char> in_vhigh(n, 0);
+        ParallelAmortizedOrient(int n, int c, double epsilon)
+            : n(n),
+              c(c),
+              epsilon(epsilon),
+              tau(static_cast<int>(std::round((24. / 5.) * static_cast<double>(c)))),
+              edge_bags(n),
+              degrees(n, 0),
+              in_vhigh(n, 0) {}
 
-    for (auto &batch : edge_batches) {
-        bool is_insert = batch.first;
-        if (is_insert) {
+        graph orient(const parlay::sequence<edge_batch>& edge_batches) {
+            for (const auto& batch : edge_batches) {
+                if (batch.first) {
+                    insert_batch(batch.second);
+                }
+                else {
+                    delete_batch(batch.second);
+                }
+            }
+            return oriented_graph();
+        }
+
+        static graph static_orientation(
+                const parlay::sequence<std::pair<vertex, vertex>>& edges,
+                int c,
+                double epsilon,
+                int n) {
+            auto normalized_edges = parlay::map(edges, [](const auto& p) {
+                auto [u, v] = p;
+                if (u < v) return std::make_pair(u, v);
+                else return std::make_pair(v, u);
+            });
+
+            auto non_self_edges = parlay::filter(normalized_edges, [](const auto& e) {
+                return e.first != e.second;
+            });
+            auto undirected_edges = parlay::remove_duplicates_ordered(non_self_edges);
+
+            auto active_edges = parlay::tabulate(2 * undirected_edges.size(), [&](size_t i) {
+                auto [u, v] = undirected_edges[i / 2];
+                return (i % 2 == 0) ? std::make_pair(u, v) : std::make_pair(v, u);
+            });
+
+            parlay::sequence<edge> oriented_edges;
+            const double degree_threshold = (2.0 + epsilon) * static_cast<double>(c);
+
+            while (!active_edges.empty()) {
+                auto grouped_edges = parlay::group_by_key(active_edges);
+                parlay::sequence<unsigned char> vertex_marked(n, 0);
+
+                parlay::parallel_for(0, grouped_edges.size(), [&](size_t i) {
+                    vertex u = grouped_edges[i].first;
+                    if (grouped_edges[i].second.size() <= degree_threshold) {
+                        vertex_marked[u] = 1;
+                    }
+                });
+
+                if (parlay::count(vertex_marked, static_cast<unsigned char>(1)) == 0) {
+                    auto min_degree_vertex = parlay::min_element(
+                        grouped_edges,
+                        [](const auto& a, const auto& b) {
+                            return a.second.size() < b.second.size();
+                        });
+                    vertex_marked[min_degree_vertex->first] = 1;
+                }
+
+                auto newly_oriented = parlay::filter(active_edges, [&](const auto& e) {
+                    auto [u, v] = e;
+                    return vertex_marked[u] &&
+                           (!vertex_marked[v] || (vertex_marked[v] && u < v));
+                });
+                oriented_edges = parlay::append(oriented_edges, newly_oriented);
+
+                active_edges = parlay::filter(active_edges, [&](const auto& e) {
+                    auto [u, v] = e;
+                    return !vertex_marked[u] && !vertex_marked[v];
+                });
+            }
+
+            graph oriented_graph(n);
+            auto grouped_oriented_edges = parlay::group_by_key(oriented_edges);
+            parlay::parallel_for(0, grouped_oriented_edges.size(), [&](size_t i) {
+                vertex u = grouped_oriented_edges[i].first;
+                oriented_graph[u] = grouped_oriented_edges[i].second;
+            });
+            return oriented_graph;
+        }
+
+    private:
+        int n;
+        int c;
+        double epsilon;
+        int tau;
+        parlay::sequence<skew_bag<vertex>> edge_bags;
+        parlay::sequence<size_t> degrees;
+        parlay::sequence<unsigned char> in_vhigh;
+
+        void insert_batch(const parlay::sequence<edge>& batch) {
             // Arbitrarily orient the batch as given and add those edges to the graph.
-            auto grouped_edges = parlay::group_by_key(batch.second);
+            auto grouped_edges = parlay::group_by_key(batch);
             parlay::parallel_for(0, grouped_edges.size(), [&](size_t i) {
                 vertex u = grouped_edges[i].first;
                 edge_bags[u].batch_insert(grouped_edges[i].second);
             });
-            recompute_degrees_and_levels(edge_bags, degrees, in_vhigh, tau);
-            auto vhigh = parlay::filter(parlay::tabulate(n, [](size_t i) {
-                return static_cast<vertex>(i);
-            }), [&](vertex u) {
-                return in_vhigh[u];
-            });
-            auto high_out_edges = outgoing_edges_for_vertices(edge_bags, vhigh);
-            if (!high_out_edges.empty()) {
-                parlay::parallel_for(0, vhigh.size(), [&](size_t i) {
-                    edge_bags[vhigh[i]] = skew_bag<vertex>();
-                });
-                graph statically_oriented = static_orientation(high_out_edges, c, epsilon, n);
-                parlay::parallel_for(0, statically_oriented.size(), [&](size_t u) {
-                    if (!statically_oriented[u].empty()) {
-                        edge_bags[u].batch_insert(statically_oriented[u]);
-                    }
-                });
-                recompute_degrees_and_levels(edge_bags, degrees, in_vhigh, tau);
-            }
+            recompute_degrees_and_levels();
+            correct_high_vertices();
         }
-        else {
-            auto with_reversed_edges = parlay::map(batch.second, [](const auto& e) {
+
+        void delete_batch(const parlay::sequence<edge>& batch) {
+            auto with_reversed_edges = parlay::map(batch, [](const auto& e) {
                 auto [u, v] = e;
                 return std::make_pair(v, u);
             });
-            auto grouped_forward_edges = parlay::group_by_key(batch.second);
+            auto grouped_forward_edges = parlay::group_by_key(batch);
             auto grouped_reversed_edges = parlay::group_by_key(with_reversed_edges);
             parlay::parallel_for(0, grouped_forward_edges.size(), [&](size_t i) {
                 vertex u = grouped_forward_edges[i].first;
@@ -168,13 +148,109 @@ graph parallel_amortized_orient(
                 auto neighbors = grouped_reversed_edges[i].second;
                 edge_bags[v].batch_delete(neighbors);
             });
-            recompute_degrees_and_levels(edge_bags, degrees, in_vhigh, tau);
+            recompute_degrees_and_levels();
         }
-    }
 
-    graph oriented_graph(n);
-    parlay::parallel_for(0, edge_bags.size(), [&](size_t u) {
-        oriented_graph[u] = edge_bags[u].to_sequence();
-    });
-    return oriented_graph;
+        void correct_high_vertices() {
+            auto vhigh = parlay::filter(parlay::tabulate(n, [](size_t i) {
+                return static_cast<vertex>(i);
+            }), [&](vertex u) {
+                return in_vhigh[u];
+            });
+            auto high_out_edges = outgoing_edges_for_vertices(vhigh);
+            if (high_out_edges.empty()) {
+                return;
+            }
+
+            parlay::parallel_for(0, vhigh.size(), [&](size_t i) {
+                edge_bags[vhigh[i]] = skew_bag<vertex>();
+            });
+            graph statically_oriented = static_orientation(high_out_edges, c, epsilon, n);
+            #ifdef INSTRUMENT
+            record_static_orientation_flips(high_out_edges, statically_oriented);
+            #endif
+            parlay::parallel_for(0, statically_oriented.size(), [&](size_t u) {
+                if (!statically_oriented[u].empty()) {
+                    edge_bags[u].batch_insert(statically_oriented[u]);
+                }
+            });
+            recompute_degrees_and_levels();
+        }
+
+        parlay::sequence<edge> outgoing_edges_for_vertices(
+                const parlay::sequence<vertex>& vertices) const {
+            auto vertex_degrees = parlay::tabulate(vertices.size(), [&](size_t i) {
+                return edge_bags[vertices[i]].size();
+            });
+            auto offsets_and_total = parlay::scan(vertex_degrees);
+            const auto& offsets = offsets_and_total.first;
+            size_t total = offsets_and_total.second;
+
+            parlay::sequence<edge> edges(total);
+            parlay::parallel_for(0, vertices.size(), [&](size_t i) {
+                vertex u = vertices[i];
+                auto neighbors = edge_bags[u].to_sequence();
+                for (size_t j = 0; j < neighbors.size(); j++) {
+                    edges[offsets[i] + j] = {u, neighbors[j]};
+                }
+            });
+            return edges;
+        }
+
+        void recompute_degrees_and_levels() {
+            parlay::parallel_for(0, edge_bags.size(), [&](size_t i) {
+                degrees[i] = edge_bags[i].size();
+                in_vhigh[i] = degrees[i] > static_cast<size_t>(tau);
+            });
+        }
+
+        graph oriented_graph() const {
+            graph oriented_graph(n);
+            parlay::parallel_for(0, edge_bags.size(), [&](size_t u) {
+                oriented_graph[u] = edge_bags[u].to_sequence();
+            });
+            return oriented_graph;
+        }
+
+        #ifdef INSTRUMENT
+        void record_static_orientation_flips(
+                const parlay::sequence<edge>& original_edges,
+                const graph& statically_oriented) {
+            std::unordered_set<edge, ParallelEdgeHash> oriented_edges;
+            for (size_t u = 0; u < statically_oriented.size(); u++) {
+                for (vertex v : statically_oriented[u]) {
+                    oriented_edges.insert({static_cast<vertex>(u), v});
+                }
+            }
+            for (const auto& e : original_edges) {
+                auto [u, v] = e;
+                if (oriented_edges.find({v, u}) != oriented_edges.end()) {
+                    increment_flip_count(e);
+                }
+            }
+        }
+
+        void increment_flip_count(const edge& e) {
+            auto it = flip_counts.find(e);
+            if (it != flip_counts.end()) {
+                it->second++;
+            }
+            else {
+                flip_counts[e] = 1;
+            }
+        }
+        #endif
+};
+
+graph static_orientation(const parlay::sequence<std::pair<vertex, vertex>>& edges,
+                         int c, double epsilon,
+                         int n) {
+    return ParallelAmortizedOrient::static_orientation(edges, c, epsilon, n);
+}
+
+graph parallel_amortized_orient(
+    const parlay::sequence<edge_batch>& edge_batches,
+    int n, int c, double epsilon) {
+    ParallelAmortizedOrient orienter(n, c, epsilon);
+    return orienter.orient(edge_batches);
 }

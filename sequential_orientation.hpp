@@ -4,15 +4,24 @@
 #include <deque>
 #include <queue>
 #include <cassert>
+#include <unordered_map>
 #include <vector>
 
+
+struct EdgeHash {
+    size_t operator()(const edge& e) const {
+        size_t h1 = std::hash<vertex>{}(e.first);
+        size_t h2 = std::hash<vertex>{}(e.second);
+        return h1 ^ (h2 + 0x9e3779b9 + (h1 << 6) + (h1 >> 2));
+    }
+};
 
 
 
 class SequentialWorstCaseOrient{
     public: 
         #ifdef INSTRUMENT
-        std::unordered_map<edge, int> flip_counts;
+        std::unordered_map<edge, int, EdgeHash> flip_counts;
         #endif
         SequentialWorstCaseOrient(int n, int k)
             : edge_queues(n), degrees(n, 0), k(k) {}
@@ -78,11 +87,7 @@ class SequentialWorstCaseOrient{
                 edge_queues[max_degree_vertex].pop_front();
                 #ifdef INSTRUMENT
                 edge e = std::make_pair(max_degree_vertex, v);
-                auto it = flip_counts.find(e);
-                if (it != flip_counts.end()) {
-                    flip_counts[e]++;
-                }
-                else flip_counts[e] = 1;
+                increment_flip_count(e);
                 #endif
                 edge_queues[v].push_back(max_degree_vertex);
                 degrees[max_degree_vertex]--;
@@ -127,6 +132,18 @@ class SequentialWorstCaseOrient{
             }
             return oriented_graph;
         }
+
+        #ifdef INSTRUMENT
+        void increment_flip_count(const edge& e) {
+            auto it = flip_counts.find(e);
+            if (it != flip_counts.end()) {
+                it->second++;
+            }
+            else {
+                flip_counts[e] = 1;
+            }
+        }
+        #endif
 };
 
 graph sequential_worst_case_orient(
@@ -136,59 +153,115 @@ graph sequential_worst_case_orient(
     return orienter.orient(edge_batches);
 }
 
-void correct_edges(std::vector<std::vector<vertex>>& edge_lists, std::priority_queue<std::pair<int, vertex>>& degree_queue, parlay::sequence<int>& degrees, int c) {
-    auto [max_degree, u] = degree_queue.top();
-    while (max_degree > c) {
-        degree_queue.pop();
-        if (degrees[u] != max_degree) continue;
-        for (auto v : edge_lists[u]) {
-            edge_lists[v].push_back(u);
-            degrees[v]++;
-            // this is definitely suboptimal.. maybe if we use sequences for the edge lists
-            // we can use semisort to group them together and only push the final numbers in?
-            degree_queue.push({degrees[v], v}); 
+class SequentialAmortizedOrient {
+    public:
+        #ifdef INSTRUMENT
+        std::unordered_map<edge, int, EdgeHash> flip_counts;
+        #endif
+
+        SequentialAmortizedOrient(int n, int c)
+            : edge_lists(n), degrees(n, 0), c(c) {}
+
+        graph orient(const parlay::sequence<edge_batch>& edge_batches) {
+            for (const auto& batch : edge_batches) {
+                bool is_insert = batch.first;
+                for (const auto& e : batch.second) {
+                    if (is_insert) {
+                        insert_edge(e);
+                    }
+                    else {
+                        delete_edge(e);
+                    }
+                }
+                correct_edges();
+            }
+            return oriented_graph();
         }
-        edge_lists[u].clear();
-        degrees[u] = 0;
-        degree_queue.push({degrees[u], u});
-        auto [new_max_degree, new_u] = degree_queue.top();
-        max_degree = new_max_degree, u = new_u;
-    }
-}
+
+    private:
+        std::vector<std::vector<vertex>> edge_lists;
+        std::priority_queue<std::pair<int, vertex>> degree_queue;
+        parlay::sequence<int> degrees;
+        int c;
+
+        void insert_edge(const edge& e) {
+            auto [u, v] = e;
+            degrees[u]++;
+            degree_queue.push({degrees[u], u});
+            edge_lists[u].push_back(v);
+        }
+
+        void delete_edge(const edge& e) {
+            auto [u, v] = e;
+            auto it_u = std::find(edge_lists[u].begin(), edge_lists[u].end(), v);
+            if (it_u != edge_lists[u].end()) {
+                edge_lists[u].erase(it_u);
+                degrees[u]--;
+                degree_queue.push({degrees[u], u});
+                return;
+            }
+
+            auto it_v = std::find(edge_lists[v].begin(), edge_lists[v].end(), u);
+            assert(it_v != edge_lists[v].end());
+            edge_lists[v].erase(it_v);
+            degrees[v]--;
+            degree_queue.push({degrees[v], v});
+        }
+
+        void correct_edges() {
+            while (!degree_queue.empty()) {
+                auto [max_degree, u] = degree_queue.top();
+                if (degrees[u] != max_degree) {
+                    degree_queue.pop();
+                    continue;
+                }
+                if (max_degree <= c) {
+                    return;
+                }
+
+                degree_queue.pop();
+                for (auto v : edge_lists[u]) {
+                    edge_lists[v].push_back(u);
+                    degrees[v]++;
+                    #ifdef INSTRUMENT
+                    increment_flip_count({u, v});
+                    #endif
+                    // this is definitely suboptimal.. maybe if we use sequences for the edge lists
+                    // we can use semisort to group them together and only push the final numbers in?
+                    degree_queue.push({degrees[v], v});
+                }
+                edge_lists[u].clear();
+                degrees[u] = 0;
+                degree_queue.push({degrees[u], u});
+            }
+        }
+
+        graph oriented_graph() const {
+            graph oriented_graph(edge_lists.size());
+            for (size_t u = 0; u < edge_lists.size(); u++) {
+                oriented_graph[u] = parlay::sequence<vertex>::from_function(
+                    edge_lists[u].size(),
+                    [&](size_t i) { return edge_lists[u][i]; });
+            }
+            return oriented_graph;
+        }
+
+        #ifdef INSTRUMENT
+        void increment_flip_count(const edge& e) {
+            auto it = flip_counts.find(e);
+            if (it != flip_counts.end()) {
+                it->second++;
+            }
+            else {
+                flip_counts[e] = 1;
+            }
+        }
+        #endif
+};
 
 graph sequential_amortized_orient(
     const parlay::sequence<edge_batch>& edge_batches,
     int n, int c) {
-    parlay::sequence<int> degrees(n, 0);
-    std::priority_queue<std::pair<int, vertex>> degree_queue;
-    std::vector<std::vector<vertex>> edge_lists(n); // no reason we couldnt make these sequences tbh
-    for (auto &batch : edge_batches) {
-        bool is_insert = batch.first;
-        for (const auto& e : batch.second) {
-            auto [u, v] = e;
-            if (is_insert) {
-                degrees[u]++;
-                degree_queue.push({degrees[u], u});
-                edge_lists[u].push_back(v);
-            }
-            else {
-                auto it_u = std::find(edge_lists[u].begin(), edge_lists[u].end(), v);
-                if (it_u != edge_lists[u].end()) {
-                    edge_lists[u].erase(it_u);
-                    degrees[u]--;
-                    degree_queue.push({degrees[u], u});
-                }
-                else {
-                    auto it_v = std::find(edge_lists[v].begin(), edge_lists[v].end(), u);
-                    assert(it_v != edge_lists[v].end());
-                    edge_lists[v].erase(it_v);
-                    degrees[v]--;
-                    degree_queue.push({degrees[v], v});
-                }
-            }
-        }
-        correct_edges(edge_lists, degree_queue, degrees, c);     
-    }
-    graph oriented_graph(n);
-    return oriented_graph;
+    SequentialAmortizedOrient orienter(n, c);
+    return orienter.orient(edge_batches);
 }
