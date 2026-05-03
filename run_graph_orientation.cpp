@@ -7,7 +7,6 @@
 #include "sequential_orientation.hpp"
 #include "parallel_orientation.hpp"
 #include <lib/compute_orientation_quality.hpp>
-#include "lib/approximate_arboricity.hpp"
 #include <chrono>
 
 std::tuple<int, int, parlay::sequence<edge_batch>> read_edge_batches(const std::string& filename) {
@@ -63,7 +62,6 @@ int main(int argc, char* argv[]) {
     graph oriented_graph;
     long long nanos;
     if (algorithm_name == "sequential_amortized" || algorithm_name == "brodal_fagerberg") {
-        int arboricity = compute_approximate_arboricity(edge_batches, n);
         auto start = std::chrono::high_resolution_clock::now();
         oriented_graph = sequential_amortized_orient(edge_batches, n, 10);
         auto end = std::chrono::high_resolution_clock::now();
@@ -105,6 +103,7 @@ int main(int argc, char* argv[]) {
                     return 1;
                 }
             }
+            std::cout << "RUnning parallel algo" << std::endl;
             auto start = std::chrono::high_resolution_clock::now();
             oriented_graph = parallel_amortized_orient(
                 edge_batches, n, c, eps, deterministic_sort, use_hash_table);
