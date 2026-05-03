@@ -29,6 +29,8 @@ LOW_ARBORICITY_CASES = (
     (4, 100_000),
     (4, 1_000_000),
 )
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parents[1]
 
 
 def require_dependencies() -> None:
@@ -46,16 +48,15 @@ def require_dependencies() -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    root = Path(__file__).resolve().parent
     parser = argparse.ArgumentParser(
         description=(
             "Run selected s0 parallel-orientation benchmarks and plot time ratios "
             "for N-thread runs relative to the 1-thread run."
         )
     )
-    parser.add_argument("--benchmarks-dir", type=Path, default=root / "benchmarks")
-    parser.add_argument("--output-dir", type=Path, default=root / "benchmark_results" / "selected_speedups")
-    parser.add_argument("--runner", type=Path, default=root / "run_graph_orientation")
+    parser.add_argument("--benchmarks-dir", type=Path, default=PROJECT_ROOT / "benchmarks")
+    parser.add_argument("--output-dir", type=Path, default=PROJECT_ROOT / "benchmark_results" / "selected_speedups")
+    parser.add_argument("--runner", type=Path, default=PROJECT_ROOT / "run_graph_orientation")
     parser.add_argument("--threads", type=int, nargs="+", default=list(THREADS))
     parser.add_argument("--batches", type=int, nargs="+", default=list(BATCHES))
     parser.add_argument("--trials", type=int, default=TRIALS)
@@ -265,7 +266,7 @@ def main() -> None:
     if 1 not in args.threads:
         raise SystemExit("--threads must include 1")
 
-    project_dir = Path(__file__).resolve().parent
+    project_dir = PROJECT_ROOT
     if not args.no_build:
         build_runner(project_dir, args.make_target)
 

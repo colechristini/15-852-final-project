@@ -4,3 +4,4 @@ benchmark_results
 *.d
 *.o
 run_graph_orientation
+run_graph_orientation_instrumented

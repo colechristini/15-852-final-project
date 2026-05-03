@@ -19,6 +19,8 @@ TIME_RE = re.compile(r"Time taken \(ns\):\s*(\d+)")
 MAX_OUT_DEGREE_RE = re.compile(r"Max out-degree:\s*(\d+)")
 AVG_OUT_DEGREE_RE = re.compile(r"Average out-degree:\s*([0-9.eE+-]+)")
 GRAPH_RE = re.compile(r"n(?P<n>\d+)_c(?P<c>\d+)_b(?P<b>\d+)_s(?P<s>\d+)\.txt$")
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parents[1]
 
 
 def require_plotting_dependencies() -> None:
@@ -39,16 +41,15 @@ def require_plotting_dependencies() -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    root = Path(__file__).resolve().parent
     parser = argparse.ArgumentParser(
         description=(
             "Benchmark parallel graph orientation on arboricity-20 batched graphs "
             "and plot parallel self-speedup relative to the 1-thread run."
         )
     )
-    parser.add_argument("--benchmarks-dir", type=Path, default=root / "benchmarks")
-    parser.add_argument("--output-dir", type=Path, default=root / "benchmark_results" / "arboricity20_parallel")
-    parser.add_argument("--runner", type=Path, default=root / "run_graph_orientation")
+    parser.add_argument("--benchmarks-dir", type=Path, default=PROJECT_ROOT / "benchmarks")
+    parser.add_argument("--output-dir", type=Path, default=PROJECT_ROOT / "benchmark_results" / "arboricity20_parallel")
+    parser.add_argument("--runner", type=Path, default=PROJECT_ROOT / "run_graph_orientation")
     parser.add_argument("--trials", type=int, default=5)
     parser.add_argument("--threads", type=int, nargs="+", default=list(THREAD_COUNTS))
     parser.add_argument("--batches", type=int, nargs="+", default=list(BATCH_COUNTS))
@@ -319,7 +320,7 @@ def main() -> None:
     if args.trials <= 0:
         raise SystemExit("--trials must be positive")
 
-    project_dir = Path(__file__).resolve().parent
+    project_dir = PROJECT_ROOT
     scratch_dir = args.output_dir / "scratch"
     scratch_dir.mkdir(parents=True, exist_ok=True)
 
