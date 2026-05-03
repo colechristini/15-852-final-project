@@ -71,7 +71,7 @@ class ParallelAmortizedOrient {
             auto non_self_edges = parlay::filter(normalized_edges, [](const auto& e) {
                 return e.first != e.second;
             });
-            auto undirected_edges = parlay::remove_duplicates_ordered(non_self_edges);
+            auto undirected_edges = parlay::remove_duplicates(non_self_edges, ParallelEdgeHash);
 
             auto active_edges = parlay::tabulate(2 * undirected_edges.size(), [&](size_t i) {
                 auto [u, v] = undirected_edges[i / 2];
@@ -267,6 +267,14 @@ class ParallelAmortizedOrient {
         }
 
         #ifdef INSTRUMENT
+        edge canonical_edge(const edge& e) const {
+            auto [u, v] = e;
+            if (u < v) {
+                return e;
+            }
+            return {v, u};
+        }
+
         void record_static_orientation_flips(
                 const parlay::sequence<edge>& original_edges,
                 const graph& statically_oriented) {
@@ -285,12 +293,13 @@ class ParallelAmortizedOrient {
         }
 
         void increment_flip_count(const edge& e) {
-            auto it = flip_counts.find(e);
+            edge key = canonical_edge(e);
+            auto it = flip_counts.find(key);
             if (it != flip_counts.end()) {
                 it->second++;
             }
             else {
-                flip_counts[e] = 1;
+                flip_counts[key] = 1;
             }
         }
         #endif

@@ -134,13 +134,22 @@ class SequentialWorstCaseOrient{
         }
 
         #ifdef INSTRUMENT
+        edge canonical_edge(const edge& e) const {
+            auto [u, v] = e;
+            if (u < v) {
+                return e;
+            }
+            return {v, u};
+        }
+
         void increment_flip_count(const edge& e) {
-            auto it = flip_counts.find(e);
+            edge key = canonical_edge(e);
+            auto it = flip_counts.find(key);
             if (it != flip_counts.end()) {
                 it->second++;
             }
             else {
-                flip_counts[e] = 1;
+                flip_counts[key] = 1;
             }
         }
         #endif
@@ -247,13 +256,22 @@ class SequentialAmortizedOrient {
         }
 
         #ifdef INSTRUMENT
+        edge canonical_edge(const edge& e) const {
+            auto [u, v] = e;
+            if (u < v) {
+                return e;
+            }
+            return {v, u};
+        }
+
         void increment_flip_count(const edge& e) {
-            auto it = flip_counts.find(e);
+            edge key = canonical_edge(e);
+            auto it = flip_counts.find(key);
             if (it != flip_counts.end()) {
                 it->second++;
             }
             else {
-                flip_counts[e] = 1;
+                flip_counts[key] = 1;
             }
         }
         #endif

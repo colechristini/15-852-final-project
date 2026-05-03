@@ -47,7 +47,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Sweep epsilon for parallel orientation on n=1000000, c=20, b=10, "
-            "and plot self-speedup plus orientation quality."
+            "and plot runtime plus orientation quality."
         )
     )
     parser.add_argument("--benchmarks-dir", type=Path, default=PROJECT_ROOT / "benchmarks")
@@ -143,14 +143,11 @@ def summarize(raw_trials: List[Dict[str, Any]], epsilons: List[float], threads: 
     summaries: Dict[str, Any] = {}
     for epsilon in epsilons:
         eps_summary = {"epsilon": epsilon, "threads": {}}
-        one_thread_time = None
         for thread_count in threads:
             trials = grouped.get((epsilon, thread_count), [])
             if not trials:
                 continue
             times = [trial["time_ns"] / 1e9 for trial in trials]
-            if thread_count == 1:
-                one_thread_time = mean(times)
             eps_summary["threads"][str(thread_count)] = {
                 "trials": len(trials),
                 "mean_time_ns": int(round(mean(trial["time_ns"] for trial in trials))),
@@ -159,23 +156,11 @@ def summarize(raw_trials: List[Dict[str, Any]], epsilons: List[float], threads: 
                 "mean_max_out_degree": mean(trial["max_out_degree"] for trial in trials),
                 "mean_average_out_degree": mean(trial["average_out_degree"] for trial in trials),
             }
-
-        if one_thread_time is None:
-            one_thread_entry = eps_summary["threads"].get("1")
-            one_thread_time = one_thread_entry["mean_time_seconds"] if one_thread_entry else None
-        for thread_count in threads:
-            thread_data = eps_summary["threads"].get(str(thread_count))
-            if thread_data is None:
-                continue
-            current = thread_data["mean_time_seconds"]
-            thread_data["speedup_1_thread_over_n_threads"] = (
-                one_thread_time / current if one_thread_time and current > 0 else float("nan")
-            )
         summaries[epsilon_key(epsilon)] = eps_summary
     return summaries
 
 
-def plot_speedup(summaries: Dict[str, Any], epsilons: List[float], threads: List[int], output_path: Path) -> None:
+def plot_runtime(summaries: Dict[str, Any], epsilons: List[float], threads: List[int], output_path: Path) -> None:
     import matplotlib.pyplot as plt
 
     plt.figure(figsize=(7.8, 5))
@@ -190,13 +175,14 @@ def plot_speedup(summaries: Dict[str, Any], epsilons: List[float], threads: List
             if thread_data is None:
                 continue
             xs.append(thread_count)
-            ys.append(thread_data["speedup_1_thread_over_n_threads"])
+            ys.append(thread_data["mean_time_seconds"])
         if xs:
             plt.plot(xs, ys, marker="o", label=f"eps={epsilon:g}")
-    plt.title("Epsilon Sweep Self-Speedup")
+    plt.title("Epsilon Sweep Runtime")
     plt.xlabel("Threads")
-    plt.ylabel("1-thread time / N-thread time")
+    plt.ylabel("Mean runtime (seconds)")
     plt.xticks(threads)
+    plt.yscale("log")
     plt.grid(True, alpha=0.3)
     plt.legend()
     plt.tight_layout()
@@ -242,8 +228,6 @@ def main() -> None:
 
     if args.trials <= 0:
         raise SystemExit("--trials must be positive")
-    if 1 not in args.threads:
-        raise SystemExit("--threads must include 1 to compute self-speedup")
 
     if not args.no_build:
         build_runner(PROJECT_ROOT, args.make_target)
@@ -314,13 +298,13 @@ def main() -> None:
     json_path = args.output_dir / "epsilon_sweep.json"
     json_path.write_text(json.dumps(results, indent=2, sort_keys=True), encoding="utf-8")
 
-    speedup_plot = args.output_dir / "epsilon_sweep_speedup.png"
+    runtime_plot = args.output_dir / "epsilon_sweep_runtime.png"
     quality_plot = args.output_dir / "epsilon_sweep_out_degree.png"
-    plot_speedup(summaries, args.epsilons, args.threads, speedup_plot)
+    plot_runtime(summaries, args.epsilons, args.threads, runtime_plot)
     plot_quality_bars(summaries, args.epsilons, quality_plot)
 
     print(f"Wrote JSON results to {json_path}")
-    print(f"Wrote plot to {speedup_plot}")
+    print(f"Wrote plot to {runtime_plot}")
     print(f"Wrote plot to {quality_plot}")
 
 
