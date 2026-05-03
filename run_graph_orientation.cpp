@@ -50,7 +50,10 @@ void write_oriented_graph(const graph& oriented_graph, const std::string& filena
 
 int main(int argc, char* argv[]) {
     if (argc < 4) {
-        std::cerr << "Usage: " << argv[0] << " <graph_file> <algorithm> <output_file> <parameters>" << std::endl;
+        std::cerr << "Usage: " << argv[0]
+                  << " <graph_file> <algorithm> <output_file> <parameters>\n"
+                  << "Parallel parameters: -c <c> -eps <epsilon> [--deterministic-sort] [--hash-table]"
+                  << std::endl;
         return 1;
     }
     std::string graph_file = argv[1];
@@ -87,8 +90,24 @@ int main(int argc, char* argv[]) {
         if (argc >= 8  && std::string(argv[4]) == "-c" && std::string(argv[6]) == "-eps") {
             int c = std::stoi(argv[5]);
             double eps = std::stod(argv[7]);
+            bool deterministic_sort = false;
+            bool use_hash_table = false;
+            for (int i = 8; i < argc; i++) {
+                std::string option = argv[i];
+                if (option == "--deterministic-sort" || option == "--ordered-group-by") {
+                    deterministic_sort = true;
+                }
+                else if (option == "--hash-table") {
+                    use_hash_table = true;
+                }
+                else {
+                    std::cerr << "Unknown parallel option: " << option << std::endl;
+                    return 1;
+                }
+            }
             auto start = std::chrono::high_resolution_clock::now();
-            oriented_graph = parallel_amortized_orient(edge_batches, n, c, eps);
+            oriented_graph = parallel_amortized_orient(
+                edge_batches, n, c, eps, deterministic_sort, use_hash_table);
             auto end = std::chrono::high_resolution_clock::now();
             nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
         }

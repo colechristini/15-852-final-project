@@ -1,2 +1,6 @@
 **/__pycache__
 benchmarks
+benchmark_results
+*.d
+*.o
+run_graph_orientation
