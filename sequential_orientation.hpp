@@ -215,7 +215,7 @@ class SequentialAmortizedOrient {
                     degree_queue.pop();
                     continue;
                 }
-                if (max_degree <= c) {
+                if (max_degree <= 4 * c) {
                     return;
                 }
 

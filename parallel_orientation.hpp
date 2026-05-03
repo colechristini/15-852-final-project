@@ -26,7 +26,13 @@ class ParallelAmortizedOrient {
         std::unordered_map<edge, int, ParallelEdgeHash> flip_counts;
         #endif
 
-        ParallelAmortizedOrient(int n, int c, double epsilon, bool deterministic_grouping = false)
+        ParallelAmortizedOrient(
+                int n,
+                int c,
+                double epsilon,
+                bool deterministic_grouping = false,
+                bool flip_low_high_out_edges = false,
+                size_t low_high_vertex_threshold = 0)
             : n(n),
               c(c),
               epsilon(epsilon),
@@ -34,7 +40,9 @@ class ParallelAmortizedOrient {
               edge_bags(n),
               degrees(n, 0),
               in_vhigh(n, 0),
-              deterministic_grouping(deterministic_grouping) {}
+              deterministic_grouping(deterministic_grouping),
+              flip_low_high_out_edges(flip_low_high_out_edges),
+              low_high_vertex_threshold(low_high_vertex_threshold) {}
 
         graph orient(const parlay::sequence<edge_batch>& edge_batches) {
             for (const auto& batch : edge_batches) {
@@ -124,6 +132,8 @@ class ParallelAmortizedOrient {
         parlay::sequence<size_t> degrees;
         parlay::sequence<unsigned char> in_vhigh;
         bool deterministic_grouping;
+        bool flip_low_high_out_edges;
+        size_t low_high_vertex_threshold;
 
         static parlay::sequence<std::pair<vertex, parlay::sequence<vertex>>> group_edges_by_source(
                 const parlay::sequence<edge>& edges,
@@ -176,6 +186,11 @@ class ParallelAmortizedOrient {
                 return;
             }
 
+            if (flip_low_high_out_edges && vhigh.size() <= low_high_vertex_threshold) {
+                flip_out_edges_from_high_vertices(vhigh, high_out_edges);
+                return;
+            }
+
             parlay::parallel_for(0, vhigh.size(), [&](size_t i) {
                 edge_bags[vhigh[i]] = EdgeBag();
             });
@@ -189,6 +204,30 @@ class ParallelAmortizedOrient {
                     edge_bags[u].batch_insert(statically_oriented[u]);
                 }
             });
+            recompute_degrees_and_levels();
+        }
+
+        void flip_out_edges_from_high_vertices(
+                const parlay::sequence<vertex>& vhigh,
+                const parlay::sequence<edge>& high_out_edges) {
+            parlay::parallel_for(0, vhigh.size(), [&](size_t i) {
+                edge_bags[vhigh[i]] = EdgeBag();
+            });
+            auto reversed_edges = parlay::map(high_out_edges, [](const auto& e) {
+                auto [u, v] = e;
+                return std::make_pair(v, u);
+            });
+            auto grouped_reversed_edges = group_edges_by_source(
+                reversed_edges, deterministic_grouping);
+            parlay::parallel_for(0, grouped_reversed_edges.size(), [&](size_t i) {
+                vertex u = grouped_reversed_edges[i].first;
+                edge_bags[u].batch_insert(grouped_reversed_edges[i].second);
+            });
+            #ifdef INSTRUMENT
+            for (const auto& e : high_out_edges) {
+                increment_flip_count(e);
+            }
+            #endif
             recompute_degrees_and_levels();
         }
 
@@ -269,11 +308,25 @@ graph parallel_amortized_orient(
     const parlay::sequence<edge_batch>& edge_batches,
     int n, int c, double epsilon,
     bool deterministic_grouping = false,
-    bool use_hash_table = false) {
+    bool use_hash_table = false,
+    bool flip_low_high_out_edges = false,
+    size_t low_high_vertex_threshold = 0) {
     if (use_hash_table) {
-        ParallelAmortizedOrient<hash_bag<vertex>> orienter(n, c, epsilon, deterministic_grouping);
+        ParallelAmortizedOrient<hash_bag<vertex>> orienter(
+            n,
+            c,
+            epsilon,
+            deterministic_grouping,
+            flip_low_high_out_edges,
+            low_high_vertex_threshold);
         return orienter.orient(edge_batches);
     }
-    ParallelAmortizedOrient<skew_bag<vertex>> orienter(n, c, epsilon, deterministic_grouping);
+    ParallelAmortizedOrient<skew_bag<vertex>> orienter(
+        n,
+        c,
+        epsilon,
+        deterministic_grouping,
+        flip_low_high_out_edges,
+        low_high_vertex_threshold);
     return orienter.orient(edge_batches);
 }
